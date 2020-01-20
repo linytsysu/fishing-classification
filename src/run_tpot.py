@@ -20,7 +20,7 @@ def feature_generate_tsfresh():
     test_df = pd.read_csv('./test.csv')
     X_test = test_df[X_train.columns]
 
-    base_model =  lgb.LGBMClassifier(n_estimators=1000, subsample=0.8)
+    base_model = lgb.LGBMClassifier(n_estimators=1000, subsample=0.8)
     base_model.fit(X_train.values, y_train)
 
     selected_columns = X_train.columns[np.argsort(base_model.feature_importances_)[::-1][:20]]
