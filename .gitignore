@@ -8,3 +8,4 @@ history/*.csv
 new/*.csv
 pyts
 feature-selector
+catboost_info
