@@ -25,9 +25,100 @@ from sklearn.preprocessing import FunctionTransformer
 from copy import copy
 from sklearn.feature_selection import RFE, VarianceThreshold
 from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier
+from sklearn.feature_selection import RFE
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline, make_union
+from sklearn.preprocessing import RobustScaler, StandardScaler
+from tpot.builtins import StackingEstimator
+from tpot.export_utils import set_param_recursive
+from sklearn.preprocessing import FunctionTransformer
+from copy import copy
+from geopy.distance import geodesic
+import matplotlib.pyplot as plt
+from scipy.stats import skew, kurtosis
+from sklearn.impute import SimpleImputer
+
 
 train_path = '/tcdata/hy_round2_train_20200225'
 test_path = '/tcdata/hy_round2_testA_20200225'
+
+
+def get_feature(arr):
+    feature = [np.max(arr), np.quantile(arr, 0.9), np.quantile(arr, 0.1),
+               np.quantile(arr, 0.75), np.quantile(arr, 0.25), np.mean(arr), np.std(arr),
+               np.median(arr),  np.std(arr) / np.mean(arr)]
+    feature.append(np.corrcoef(np.array([arr[:-1], arr[1:]]))[0, 1])
+    feature.append(skew(arr))
+    feature.append(kurtosis(arr))
+    return feature
+
+
+def get_paper_feature():
+    train_df_list = []
+    for file_name in os.listdir(train_path):
+        df = pd.read_csv(os.path.join(train_path, file_name))
+        train_df_list.append(df)
+
+    test_df_list = []
+    for file_name in os.listdir(test_path):
+        df = pd.read_csv(os.path.join(test_path, file_name))
+        test_df_list.append(df)
+
+    train_df = pd.concat(train_df_list)
+    test_df = pd.concat(test_df_list)
+
+    train_df['time'] = pd.to_datetime(train_df['time'], format='%m%d %H:%M:%S')
+    test_df['time'] = pd.to_datetime(test_df['time'], format='%m%d %H:%M:%S')
+
+    all_df = pd.concat([train_df, test_df], sort=False)
+
+    features = []
+    for _, group in all_df.groupby('渔船ID'):
+        group = group.sort_values(by=['time'])
+        lat = group['lat'].values
+        lon = group['lon'].values
+        time_ = group['time'].values
+        dire = group['方向'].values
+
+        speed_list = []
+        for i in range(lat.shape[0]):
+            if i == 0:
+                continue
+            hour = (time_[i] - time_[i-1]) / np.timedelta64(1,'h')
+            dist = geodesic((lat[i-1], lon[i-1]), (lat[i ], lon[i]))
+            speed_list.append(dist.km / hour)
+
+        # acc_list = []
+        # for i in range(len(speed_list)):
+        #     if i == 0:
+        #         continue
+        #     hour = (time_[i] - time_[i-1]) / np.timedelta64(1,'h')
+        #     acc = (speed_list[i] - speed_list[i-1]) / hour
+        #     acc_list.append(acc)
+
+        c = np.sum(np.cos(dire / 180 * np.pi)) / group.shape[0]
+        s = np.sum(np.sin(dire / 180 * np.pi)) / group.shape[0]
+        r = np.sqrt(c ** 2 + s ** 2)
+        theta = np.arctan(s / c)
+        angle_feature = [r, theta, np.sqrt(-2 * np.log(r))]
+
+        turn_list = []
+        for i in range(dire.shape[0]):
+            if i == 0:
+                continue
+            turn = 1 - np.cos(dire[i-1] / 180 * np.pi - dire[i] / 180 * np.pi)
+            turn_list.append(turn * np.pi)
+        turn_list = np.array(turn_list)
+        c = np.sum(np.cos(turn_list)) / (group.shape[0] - 1)
+        s = np.sum(np.sin(turn_list)) / (group.shape[0] - 1)
+        r = np.sqrt(c ** 2 + s ** 2)
+        theta = np.arctan(s / c)
+        turn_feature =  [r, theta, np.sqrt(-2 * np.log(r))]
+
+        features.append(np.concatenate([get_feature(speed_list), angle_feature[:1], turn_feature[:1]]))
+
+    return features[:len(train_df_list)], features[len(train_df_list):]
+
 
 def tsfresh_extract_features():
     train_df_list = []
@@ -208,13 +299,36 @@ def get_model_v2():
     return exported_pipeline
 
 
+def get_model_v3():
+    exported_pipeline = make_pipeline(
+        make_union(
+            FunctionTransformer(copy),
+            FunctionTransformer(copy)
+        ),
+        RobustScaler(),
+        RFE(estimator=ExtraTreesClassifier(criterion="entropy", max_features=0.25, n_estimators=100), step=0.6500000000000001),
+        StandardScaler(),
+        GradientBoostingClassifier(learning_rate=0.5, max_depth=9, max_features=0.05, min_samples_leaf=18, min_samples_split=3, n_estimators=100, subsample=0.9000000000000001)
+    )
+    # Fix random state for all the steps in exported pipeline
+    set_param_recursive(exported_pipeline.steps, 'random_state', 42)
+    return exported_pipeline
+
+
 if __name__ == "__main__":
+    X_paper_train, X_paper_test = get_paper_feature()
+
     # 生成特征文件
     tsfresh_extract_features()
 
     X_train_tsfresh, y_train, X_test_tsfresh = feature_generate_tsfresh()
-    X_train = np.concatenate([X_train_tsfresh.values], axis=1)
-    X_test = np.concatenate([X_test_tsfresh.values], axis=1)
+    X_train = np.concatenate([X_train_tsfresh.values, X_paper_train], axis=1)
+    X_test = np.concatenate([X_test_tsfresh.values, X_test_train], axis=1)
+
+    imputer = SimpleImputer(missing_values=np.nan, strategy='mean')
+
+    X_train = imputer.fit_transform(pd.DataFrame(X_train).replace([np.inf, -np.inf], np.nan).values)
+    X_test = imputer.fit_transform(pd.DataFrame(X_test).replace([np.inf, -np.inf], np.nan).values)
 
     le = preprocessing.LabelEncoder()
     y_train = le.fit_transform(y_train)
@@ -243,6 +357,18 @@ if __name__ == "__main__":
     print(score_v2_list)
     print(np.mean(score_v2_list), np.std(score_v2_list))
 
+    kf = KFold(n_splits=5, random_state=22, shuffle=True)
+    model_v3_list = []
+    score_v3_list = []
+    for train_index, test_index in kf.split(X_train):
+        model_v3 = get_model_v3()
+        eval_set = (X_train[test_index], y_train[test_index])
+        model_v3.fit(X_train[train_index], y_train[train_index])
+        model_v3_list.append(model_v3)
+        score_v3_list.append(f1_score(y_train[test_index], model_v3.predict(X_train[test_index]), average='macro'))
+    print(score_v3_list)
+    print(np.mean(score_v3_list), np.std(score_v3_list))
+
     result_list = []
     for model in model_v1_list:
         result = model.predict_proba(X_test)
@@ -252,7 +378,11 @@ if __name__ == "__main__":
         result = model.predict_proba(X_test)
         result_list.append(result)
 
-    result = np.argmax(np.sum(np.array(result_list), axis=0) / 10, axis=1)
+    for model in model_v3_list:
+        result = model.predict_proba(X_test)
+        result_list.append(result)
+
+    result = np.argmax(np.sum(np.array(result_list), axis=0) / 15, axis=1)
 
     result = le.inverse_transform(result)
     pd.DataFrame(result, index=X_test_tsfresh.index).to_csv('./result.csv', header=None)
