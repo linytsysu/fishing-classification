@@ -10,3 +10,7 @@ pyts
 feature-selector
 catboost_info
 feature/
+
+round2/train.csv
+round2/*.cpython
+round2/__pycache__

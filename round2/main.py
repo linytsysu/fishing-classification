@@ -37,6 +37,7 @@ from geopy.distance import geodesic
 import matplotlib.pyplot as plt
 from scipy.stats import skew, kurtosis
 from sklearn.impute import SimpleImputer
+from parameters import fc_parameters
 
 
 train_path = '/tcdata/hy_round2_train_20200225'
@@ -141,7 +142,8 @@ def tsfresh_extract_features():
 
     df = all_df.drop(columns=['type'])
 
-    extracted_df = extract_features(df, column_id='渔船ID', column_sort='time', n_jobs=8)
+    extracted_df = extract_features(df, column_id='渔船ID', column_sort='time',
+                                    n_jobs=8, kind_to_fc_parameters=fc_parameters)
 
     train_df = extracted_df.iloc[:len(train_df_list)]
     test_df = extracted_df.iloc[len(train_df_list):]
@@ -154,18 +156,18 @@ def tsfresh_extract_features():
     le = preprocessing.LabelEncoder()
     y_train = le.fit_transform(y_train)
 
-    impute(train_df)
-    filtered_train_df = select_features(train_df, y_train)
-    filtered_test_df = test_df[filtered_train_df.columns]
+    # impute(train_df)
+    # filtered_train_df = select_features(train_df, y_train)
+    # filtered_test_df = test_df[filtered_train_df.columns]
 
-    filtered_train_df['type'] = le.inverse_transform(y_train)
+    train_df['type'] = le.inverse_transform(y_train)
 
     if not os.path.exists('./feature'):
         os.makedirs('./feature')
-    filtered_train_df.to_csv('./feature/train.csv')
-    filtered_test_df.to_csv('./feature/test.csv')
+    train_df.to_csv('./feature/train.csv')
+    test_df.to_csv('./feature/test.csv')
 
-    return filtered_train_df, filtered_test_df
+    return train_df, test_df
 
 
 def feature_generate_manually():
@@ -234,14 +236,14 @@ def feature_generate_tsfresh():
     test_df = pd.read_csv('./feature/test.csv', index_col=0)
     X_test = test_df[X_train.columns]
 
-    base_model = lgb.LGBMClassifier(n_estimators=1000, subsample=0.8)
-    base_model.fit(X_train.values, y_train)
+    # base_model = lgb.LGBMClassifier(n_estimators=1000, subsample=0.8)
+    # base_model.fit(X_train.values, y_train)
 
-    selected_columns = X_train.columns[np.argsort(base_model.feature_importances_)[::-1][:50]]
-    print(selected_columns)
+    # selected_columns = X_train.columns[np.argsort(base_model.feature_importances_)[::-1][:50]]
+    # print(selected_columns)
 
-    X_train = X_train[selected_columns]
-    X_test = X_test[selected_columns]
+    # X_train = X_train[selected_columns]
+    # X_test = X_test[selected_columns]
 
     X_train_manully, _, X_test_manully = feature_generate_manually()
 
@@ -261,9 +263,9 @@ def feature_generate_tsfresh():
     X_train['area'] = X_train_manully['area'].values
     X_test['area'] = X_test_manully['area'].values
 
-    for column in list(X_test.columns[X_test.isnull().sum() > 0]):
-        mean_val = X_test[column].median()
-        X_test[column].fillna(mean_val, inplace=True)
+    # for column in list(X_test.columns[X_test.isnull().sum() > 0]):
+    #     mean_val = X_test[column].median()
+    #     X_test[column].fillna(mean_val, inplace=True)
 
     return X_train, y_train.values, X_test
 
@@ -323,7 +325,7 @@ if __name__ == "__main__":
 
     X_train_tsfresh, y_train, X_test_tsfresh = feature_generate_tsfresh()
     X_train = np.concatenate([X_train_tsfresh.values, X_paper_train], axis=1)
-    X_test = np.concatenate([X_test_tsfresh.values, X_test_train], axis=1)
+    X_test = np.concatenate([X_test_tsfresh.values, X_paper_test], axis=1)
 
     imputer = SimpleImputer(missing_values=np.nan, strategy='mean')
 
