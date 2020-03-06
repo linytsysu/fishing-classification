@@ -37,11 +37,30 @@ from geopy.distance import geodesic
 import matplotlib.pyplot as plt
 from scipy.stats import skew, kurtosis
 from sklearn.impute import SimpleImputer
+from tpot.builtins import StackingEstimator, ZeroCount
+from xgboost import XGBClassifier
 from parameters import fc_parameters
 
 
 train_path = '/tcdata/hy_round2_train_20200225'
 test_path = '/tcdata/hy_round2_testA_20200225'
+
+
+def get_distance(lat1, lon1, lat2, lon2):
+    R = 6373.0
+
+    lat1 = np.radians(lat1)
+    lon1 = np.radians(lon1)
+    lat2 = np.radians(lat2)
+    lon2 = np.radians(lon2)
+
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+
+    a = np.sin(dlat / 2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2)**2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    distance = R * c
+    return distance
 
 
 def get_feature(arr):
@@ -116,7 +135,23 @@ def get_paper_feature():
         theta = np.arctan(s / c)
         turn_feature =  [r, theta, np.sqrt(-2 * np.log(r))]
 
-        features.append(np.concatenate([get_feature(speed_list), angle_feature[:1], turn_feature[:1]]))
+        # sinuosity = []
+        # for i in range(lat.shape[0]):
+        #     if i <= 4:
+        #         continue
+        #     dist_line = get_distance(lat[i-5], lon[i-5], lat[i], lon[i])
+
+        #     dist_sum = 0
+        #     for j in range(5):
+        #         dist_sum += get_distance(lat[i-j-1], lon[i-j-1], lat[i-j], lon[i-j])
+
+        #     if dist_line == 0:
+        #         sinuosity.append(0)
+        #     else:
+        #         sinuosity.append(dist_sum / dist_line)
+
+        features.append(np.concatenate([get_feature(speed_list),
+                                        angle_feature[:2], turn_feature[:2]]))
 
     return features[:len(train_df_list)], features[len(train_df_list):]
 
@@ -317,6 +352,19 @@ def get_model_v3():
     return exported_pipeline
 
 
+def get_model_v4():
+    exported_pipeline = make_pipeline(
+        StackingEstimator(estimator=XGBClassifier(learning_rate=0.001, max_depth=2, min_child_weight=17, n_estimators=100, nthread=1, subsample=0.8)),
+        ZeroCount(),
+        VarianceThreshold(threshold=0.2),
+        RFE(estimator=ExtraTreesClassifier(criterion="entropy", max_features=0.15000000000000002, n_estimators=100), step=0.2),
+        GradientBoostingClassifier(learning_rate=0.5, max_depth=7, max_features=0.15000000000000002, min_samples_leaf=2, min_samples_split=3, n_estimators=100, subsample=1.0)
+    )
+    # Fix random state for all the steps in exported pipeline
+    set_param_recursive(exported_pipeline.steps, 'random_state', 37)
+    return exported_pipeline
+
+
 if __name__ == "__main__":
     X_paper_train, X_paper_test = get_paper_feature()
 
@@ -371,6 +419,18 @@ if __name__ == "__main__":
     print(score_v3_list)
     print(np.mean(score_v3_list), np.std(score_v3_list))
 
+    kf = KFold(n_splits=5, random_state=22, shuffle=True)
+    model_v4_list = []
+    score_v4_list = []
+    for train_index, test_index in kf.split(X_train):
+        model_v4 = get_model_v4()
+        eval_set = (X_train[test_index], y_train[test_index])
+        model_v4.fit(X_train[train_index], y_train[train_index])
+        model_v4_list.append(model_v4)
+        score_v4_list.append(f1_score(y_train[test_index], model_v4.predict(X_train[test_index]), average='macro'))
+    print(score_v4_list)
+    print(np.mean(score_v4_list), np.std(score_v4_list))
+
     result_list = []
     for model in model_v1_list:
         result = model.predict_proba(X_test)
@@ -384,7 +444,11 @@ if __name__ == "__main__":
         result = model.predict_proba(X_test)
         result_list.append(result)
 
-    result = np.argmax(np.sum(np.array(result_list), axis=0) / 15, axis=1)
+    for model in model_v4_list:
+        result = model.predict_proba(X_test)
+        result_list.append(result)
+
+    result = np.argmax(np.sum(np.array(result_list), axis=0) / 20, axis=1)
 
     result = le.inverse_transform(result)
     pd.DataFrame(result, index=X_test_tsfresh.index).to_csv('./result.csv', header=None)
