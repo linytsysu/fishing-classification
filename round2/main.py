@@ -151,7 +151,7 @@ def get_paper_feature():
         #         sinuosity.append(dist_sum / dist_line)
 
         features.append(np.concatenate([get_feature(speed_list),
-                                        angle_feature[:2], turn_feature[:2]]))
+                                        angle_feature[:1], turn_feature[:1]]))
 
     return features[:len(train_df_list)], features[len(train_df_list):]
 
@@ -364,6 +364,16 @@ def get_model_v4():
     set_param_recursive(exported_pipeline.steps, 'random_state', 37)
     return exported_pipeline
 
+def get_model_v5():
+    exported_pipeline = make_pipeline(
+        RFE(estimator=ExtraTreesClassifier(criterion="entropy", max_features=0.6500000000000001, n_estimators=100), step=0.8),
+        VarianceThreshold(threshold=0.2),
+        StandardScaler(),
+        ExtraTreesClassifier(bootstrap=False, criterion="entropy", max_features=0.3, min_samples_leaf=1, min_samples_split=3, n_estimators=100)
+    )
+    # Fix random state for all the steps in exported pipeline
+    set_param_recursive(exported_pipeline.steps, 'random_state', 53)
+    return exported_pipeline
 
 if __name__ == "__main__":
     X_paper_train, X_paper_test = get_paper_feature()
