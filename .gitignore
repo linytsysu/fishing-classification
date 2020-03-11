@@ -14,3 +14,7 @@ feature/
 round2/train.csv
 round2/*.cpython
 round2/__pycache__
+
+*.csv
+.DS_Store
+__pycache__

@@ -39,7 +39,7 @@ for ship_id, group in all_df.groupby('渔船ID'):
     id_list.append(ship_id)
 print(len(id_list))
 
-pype = Pype([('segment', SegmentX(width=72, overlap=0.2))])
+pype = Pype([('segment', SegmentX(width=288, overlap=0.1))])
 
 pype = pype.fit(X, y)
 

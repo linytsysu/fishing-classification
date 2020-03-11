@@ -16,6 +16,9 @@ from seglearn.transform import FeatureRep, SegmentX, SegmentXY
 from tsfresh import select_features, extract_features
 from parameters import fc_parameters
 
+from geopy.distance import geodesic
+from scipy.stats import skew, kurtosis
+
 train_path = '/tcdata/hy_round2_train_20200225'
 test_path = '/tcdata/hy_round2_testA_20200225'
 
@@ -48,7 +51,7 @@ for ship_id, group in all_df.groupby('渔船ID'):
     id_list.append(ship_id)
 print(len(id_list))
 
-pype = Pype([('segment', SegmentX(width=60, overlap=0.2))])
+pype = Pype([('segment', SegmentX(width=12, overlap=0.0))])
 
 pype = pype.fit(X, y)
 
@@ -85,13 +88,66 @@ extracted_df['x_max-x_min'] = new_df['x_max'] - new_df['x_min']
 extracted_df['y_max-y_min'] = new_df['y_max'] - new_df['y_min']
 extracted_df['x_max-y_min'] = new_df['x_max'] - new_df['y_min']
 extracted_df['y_max-x_min'] = new_df['y_max'] - new_df['x_min']
+extracted_df['slope'] = extracted_df['y_max-y_min'] / np.where(extracted_df['x_max-x_min']==0, 0.001, extracted_df['x_max-x_min'])
+extracted_df['area'] = extracted_df['x_max-x_min'] * extracted_df['y_max-y_min']
+
+
+def get_feature(arr):
+    feature = [np.max(arr), np.quantile(arr, 0.9), np.quantile(arr, 0.1),
+               np.quantile(arr, 0.75), np.quantile(arr, 0.25), np.mean(arr), np.std(arr),
+               np.median(arr),  np.std(arr) / np.mean(arr)]
+    feature.append(np.corrcoef(np.array([arr[:-1], arr[1:]]))[0, 1])
+    feature.append(skew(arr))
+    feature.append(kurtosis(arr))
+    return feature
+
+
+features = []
+for _, group in new_all_df.groupby('渔船ID'):
+    group = group.sort_values(by=['time'])
+    lat = group['lat'].values
+    lon = group['lon'].values
+    time_ = pd.to_datetime(group['time'], format='%Y-%m-%d %H:%M:%S').values
+    dire = group['方向'].values
+
+    speed_list = []
+    for i in range(lat.shape[0]):
+        if i == 0:
+            continue
+        hour = (time_[i] - time_[i-1]) / np.timedelta64(1,'h')
+        dist = geodesic((lat[i-1], lon[i-1]), (lat[i ], lon[i]))
+        speed_list.append(dist.km / hour)
+
+    c = np.sum(np.cos(dire / 180 * np.pi)) / group.shape[0]
+    s = np.sum(np.sin(dire / 180 * np.pi)) / group.shape[0]
+    r = np.sqrt(c ** 2 + s ** 2)
+    theta = np.arctan(s / c)
+    angle_feature = [r, theta, np.sqrt(-2 * np.log(r))]
+
+    turn_list = []
+    for i in range(dire.shape[0]):
+        if i == 0:
+            continue
+        turn = 1 - np.cos(dire[i-1] / 180 * np.pi - dire[i] / 180 * np.pi)
+        turn_list.append(turn * np.pi)
+    turn_list = np.array(turn_list)
+    c = np.sum(np.cos(turn_list)) / (group.shape[0] - 1)
+    s = np.sum(np.sin(turn_list)) / (group.shape[0] - 1)
+    r = np.sqrt(c ** 2 + s ** 2)
+    theta = np.arctan(s / c)
+    turn_feature =  [r, theta, np.sqrt(-2 * np.log(r))]
+
+    features.append(np.concatenate([get_feature(speed_list),
+                                    angle_feature[:1], turn_feature[:1]]))
+
+extracted_df_ = pd.concat([pd.DataFrame(np.array(features)), extracted_df], axis=1)
 
 y = []
 for name, group in new_all_df.groupby('渔船ID'):
     y.append(group.iloc[0]['type'])
 
-train_df = extracted_df.iloc[:np.sum(shape_list[:len(train_df_list)])]
-test_df = extracted_df.iloc[np.sum(shape_list[:len(train_df_list)]):]
+train_df = extracted_df_.iloc[:np.sum(shape_list[:len(train_df_list)])]
+test_df = extracted_df_.iloc[np.sum(shape_list[:len(train_df_list)]):]
 
 y_train = y[:train_df.shape[0]]
 le = preprocessing.LabelEncoder()
