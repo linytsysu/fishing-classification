@@ -24,7 +24,7 @@ from tpot.export_utils import set_param_recursive
 from sklearn.preprocessing import FunctionTransformer
 from copy import copy
 from sklearn.feature_selection import RFE, VarianceThreshold
-from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier
+from sklearn.ensemble import ExtraTreesClassifier, GradientBoostingClassifier, RandomForestClassifier
 from sklearn.feature_selection import RFE
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import make_pipeline, make_union
@@ -32,6 +32,7 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 from tpot.builtins import StackingEstimator
 from tpot.export_utils import set_param_recursive
 from sklearn.preprocessing import FunctionTransformer
+from sklearn.naive_bayes import BernoulliNB
 from copy import copy
 from geopy.distance import geodesic
 import matplotlib.pyplot as plt
@@ -39,11 +40,11 @@ from scipy.stats import skew, kurtosis
 from sklearn.impute import SimpleImputer
 from tpot.builtins import StackingEstimator, ZeroCount
 from xgboost import XGBClassifier
-from parameters import fc_parameters
+from parameters import fc_parameters_v1
 
 
 train_path = '/tcdata/hy_round2_train_20200225'
-test_path = '/tcdata/hy_round2_testA_20200225'
+test_path = '/tcdata/hy_round2_testB_20200312'
 
 
 def get_distance(lat1, lon1, lat2, lon2):
@@ -76,13 +77,15 @@ def get_feature(arr):
 def get_paper_feature():
     train_df_list = []
     for file_name in os.listdir(train_path):
-        df = pd.read_csv(os.path.join(train_path, file_name))
-        train_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(train_path, file_name))
+            train_df_list.append(df)
 
     test_df_list = []
     for file_name in os.listdir(test_path):
-        df = pd.read_csv(os.path.join(test_path, file_name))
-        test_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(test_path, file_name))
+            test_df_list.append(df)
 
     train_df = pd.concat(train_df_list)
     test_df = pd.concat(test_df_list)
@@ -159,13 +162,15 @@ def get_paper_feature():
 def tsfresh_extract_features():
     train_df_list = []
     for file_name in os.listdir(train_path):
-        df = pd.read_csv(os.path.join(train_path, file_name))
-        train_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(train_path, file_name))
+            train_df_list.append(df)
 
     test_df_list = []
     for file_name in os.listdir(test_path):
-        df = pd.read_csv(os.path.join(test_path, file_name))
-        test_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(test_path, file_name))
+            test_df_list.append(df)
 
     train_df = pd.concat(train_df_list)
     test_df = pd.concat(test_df_list)
@@ -178,7 +183,7 @@ def tsfresh_extract_features():
     df = all_df.drop(columns=['type'])
 
     extracted_df = extract_features(df, column_id='渔船ID', column_sort='time',
-                                    n_jobs=8, kind_to_fc_parameters=fc_parameters)
+                                    n_jobs=8, kind_to_fc_parameters=fc_parameters_v1)
 
     train_df = extracted_df.iloc[:len(train_df_list)]
     test_df = extracted_df.iloc[len(train_df_list):]
@@ -208,13 +213,15 @@ def tsfresh_extract_features():
 def feature_generate_manually():
     train_df_list = []
     for file_name in os.listdir(train_path):
-        df = pd.read_csv(os.path.join(train_path, file_name))
-        train_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(train_path, file_name))
+            train_df_list.append(df)
 
     test_df_list = []
     for file_name in os.listdir(test_path):
-        df = pd.read_csv(os.path.join(test_path, file_name))
-        test_df_list.append(df)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(os.path.join(test_path, file_name))
+            test_df_list.append(df)
 
     train_df = pd.concat(train_df_list)
     test_df = pd.concat(test_df_list)
@@ -366,16 +373,19 @@ def get_model_v4():
 
 def get_model_v5():
     exported_pipeline = make_pipeline(
-        RFE(estimator=ExtraTreesClassifier(criterion="entropy", max_features=0.6500000000000001, n_estimators=100), step=0.8),
-        VarianceThreshold(threshold=0.2),
-        StandardScaler(),
-        ExtraTreesClassifier(bootstrap=False, criterion="entropy", max_features=0.3, min_samples_leaf=1, min_samples_split=3, n_estimators=100)
+        StackingEstimator(estimator=BernoulliNB(alpha=1.0, fit_prior=False)),
+        RFE(estimator=ExtraTreesClassifier(criterion="entropy", max_features=0.45, n_estimators=100), step=0.6500000000000001),
+        RandomForestClassifier(bootstrap=False, criterion="entropy", max_features=0.1, min_samples_leaf=1, min_samples_split=2, n_estimators=100)
     )
     # Fix random state for all the steps in exported pipeline
-    set_param_recursive(exported_pipeline.steps, 'random_state', 53)
+    set_param_recursive(exported_pipeline.steps, 'random_state', 42)
+
     return exported_pipeline
 
 if __name__ == "__main__":
+    from main_v3 import generate_result
+    generate_result()
+
     X_paper_train, X_paper_test = get_paper_feature()
 
     # 生成特征文件
@@ -441,6 +451,18 @@ if __name__ == "__main__":
     print(score_v4_list)
     print(np.mean(score_v4_list), np.std(score_v4_list))
 
+    kf = KFold(n_splits=5, random_state=1, shuffle=True)
+    model_v5_list = []
+    score_v5_list = []
+    for train_index, test_index in kf.split(X_train):
+        model_v5 = get_model_v5()
+        eval_set = (X_train[test_index], y_train[test_index])
+        model_v5.fit(X_train[train_index], y_train[train_index])
+        model_v5_list.append(model_v5)
+        score_v5_list.append(f1_score(y_train[test_index], model_v5.predict(X_train[test_index]), average='macro'))
+    print(score_v5_list)
+    print(np.mean(score_v5_list), np.std(score_v5_list))
+
     result_list = []
     for model in model_v1_list:
         result = model.predict_proba(X_test)
@@ -458,7 +480,13 @@ if __name__ == "__main__":
         result = model.predict_proba(X_test)
         result_list.append(result)
 
-    result = np.argmax(np.sum(np.array(result_list), axis=0) / 20, axis=1)
+    for model in model_v5_list:
+        result = model.predict_proba(X_test)
+        result_list.append(result)
+
+    proba = pd.read_csv('./probaresult.csv', header=None, index_col=0)
+
+    result = np.argmax((np.sum(np.array(result_list), axis=0) + proba.values) / 30, axis=1)
 
     result = le.inverse_transform(result)
     pd.DataFrame(result, index=X_test_tsfresh.index).to_csv('./result.csv', header=None)
